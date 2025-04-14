@@ -1,0 +1,445 @@
+// Initialize collapsible sections and modal functionality
+document.addEventListener('DOMContentLoaded', () => {
+    // Initialize collapsible sections
+    document.querySelectorAll('.collapsible-header').forEach(header => {
+        header.addEventListener('click', () => {
+            const section = header.parentElement;
+            section.classList.toggle('active');
+            const icon = header.querySelector('.toggle-icon');
+            icon.textContent = section.classList.contains('active') ? '▼' : '▲';
+        });
+    });
+    
+    // Close modal when clicking outside of it
+    window.addEventListener('click', (event) => {
+        const modal = document.getElementById('readme-modal');
+        const releasesModal = document.getElementById('releases-modal');
+        if (event.target === modal) {
+            closeReadmeModal();
+        } else if (event.target === releasesModal) {
+            closeReleasesModal();
+        }
+    });
+    
+    // Close modal with Escape key
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+            closeReadmeModal();
+            closeReleasesModal();
+        }
+    });
+});
+
+// Open README modal
+function openReadmeModal() {
+    document.getElementById('readme-modal').style.display = 'block';
+    document.body.style.overflow = 'hidden'; // Prevent scrolling behind modal
+}
+
+// Close README modal
+function closeReadmeModal() {
+    document.getElementById('readme-modal').style.display = 'none';
+    document.body.style.overflow = ''; // Restore scrolling
+}
+
+// Open Releases modal
+function openReleasesModal() {
+    document.getElementById('releases-modal').style.display = 'block';
+    document.body.style.overflow = 'hidden'; // Prevent scrolling behind modal
+}
+
+// Close Releases modal
+function closeReleasesModal() {
+    document.getElementById('releases-modal').style.display = 'none';
+    document.body.style.overflow = ''; // Restore scrolling
+}
+
+async function analyzeRepo() {
+    const urlInput = document.getElementById('repoUrl');
+    const errorDiv = document.getElementById('error');
+    const resultsDiv = document.getElementById('results');
+    const analyzeButton = document.querySelector('button');
+    
+    // Clear previous results
+    errorDiv.textContent = '';
+    ['metadata', 'ai-summary', 'readme-button-container', 'releases-button-container', 'contributors', 'activity'].forEach(id => {
+        const element = document.getElementById(id);
+        if (element.classList.contains('collapsible')) {
+            element.querySelector('.collapsible-content').innerHTML = '';
+            element.classList.remove('active');
+            element.classList.add('hidden');
+        } else {
+            element.innerHTML = '';
+        }
+    });
+    
+    // Clear modal contents
+    document.getElementById('readme-content').innerHTML = '';
+    document.getElementById('releases-content').innerHTML = '';
+    
+    // Show loading state
+    analyzeButton.disabled = true;
+    analyzeButton.innerHTML = '<span class="spinner"></span> Analyzing...';
+    
+    try {
+        const response = await fetch('/analyze', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ url: urlInput.value })
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.error || 'Failed to analyze repository');
+        }
+        
+        // Display metadata
+        displayMetadata(data.metadata);
+        
+        // Display AI Summary if README is available
+        if (data.readme?.summary) {
+            // Show summarizing indicator
+            const summaryDiv = document.getElementById('ai-summary');
+            summaryDiv.innerHTML = '<div class="loading-indicator"><span class="spinner"></span> Generating AI summary...</div>';
+            
+            // Small delay to show the loading state
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            displayAISummary(data.readme.summary);
+        }
+        
+        // Display README button if README is available
+        if (data.readme?.html) {
+            const buttonContainer = document.getElementById('readme-button-container');
+            buttonContainer.innerHTML = `
+                <button class="readme-button" onclick="openReadmeModal()">
+                    <span class="readme-button-icon">📖</span> View README
+                </button>
+            `;
+            
+            // Store README content in the modal
+            document.getElementById('readme-content').innerHTML = data.readme.html;
+        }
+        
+        // Display releases if available
+        if (data.releases?.length > 0) {
+            const buttonContainer = document.getElementById('releases-button-container');
+            buttonContainer.innerHTML = `
+                <button class="readme-button" onclick="openReleasesModal()">
+                    <span class="readme-button-icon">🏷️</span> Releases
+                </button>
+            `;
+            
+            // Store releases content in the modal
+            displayReleases(data.releases, data.owner, data.repo);
+        }
+        
+        // Display contributors
+        displayContributors(data.contributors);
+        
+        // Display commit activity
+        displayCommitActivity(data.commit_activity);
+        
+    } catch (error) {
+        errorDiv.textContent = error.message;
+    } finally {
+        // Reset button state
+        analyzeButton.disabled = false;
+        analyzeButton.textContent = 'Analyze';
+    }
+}
+
+function displayMetadata(meta) {
+    const createdDate = new Date(meta.created_at).toLocaleDateString();
+    const updatedDate = new Date(meta.updated_at).toLocaleDateString();
+    
+    // Get non-default branches
+    const otherBranches = meta.branches
+        ? meta.branches.filter(branch => !branch.is_default).map(branch => branch.name)
+        : [];
+    
+    document.getElementById('metadata').innerHTML = `
+        <h2>Repository Info</h2>
+        <p><strong>${meta.name}</strong> ${meta.description ? `- ${meta.description}` : ''}</p>
+        <div class="metadata-grid">
+            <div class="metrics" style="height: 200px;">
+                <h3>Activity Metrics</h3>
+                <ul>
+                    <li>⭐ Stars: ${meta.stars}</li>
+                    <li>🔄 Forks: ${meta.forks}</li>
+                    <li>👀 Watchers: ${meta.watchers}</li>
+                    <li>❗ Open Issues: ${meta.open_issues}</li>
+                </ul>
+            </div>
+            <div class="technical">
+                <h3>Technical Details</h3>
+                <ul>
+                    <li>Primary Language: ${meta.language || 'Not specified'}</li>
+                    <li>Size: ${(meta.size/1024).toFixed(2)} MB</li>
+                    <li>Default Branch: ${meta.default_branch}</li>
+                    <li>Number of Branches: ${meta.branch_count || 0}</li>
+                    ${meta.license ? `<li>License: ${meta.license}</li>` : ''}
+                </ul>
+                
+                <div class="technical-flex">
+                    ${otherBranches.length > 0 ? `
+                    <div class="tech-section branches">
+                        <h4>Other Branches:</h4>
+                        <div class="branch-list">
+                            ${otherBranches.map(branch => `<span class="branch-tag">${branch}</span>`).join(' ')}
+                        </div>
+                    </div>
+                    ` : ''}
+                    
+                    ${Object.keys(meta.languages).length > 0 ? `
+                    <div class="tech-section languages">
+                        <h4>Languages Used:</h4>
+                        <div class="language-bars">
+                            ${Object.entries(meta.languages)
+                                .sort((a, b) => b[1].bytes - a[1].bytes)
+                                .map(([lang, data]) => `
+                                    <div class="language-item">
+                                        <div class="language-label">
+                                            ${lang}: ${data.percentage}%
+                                        </div>
+                                        <div class="language-bar">
+                                            <div class="language-fill" style="width: ${data.percentage}%"></div>
+                                        </div>
+                                    </div>
+                                `).join('')}
+                        </div>
+                    </div>
+                    ` : ''}
+                </div>
+            </div>
+            <div class="status">
+                <h3>Status</h3>
+                <ul>
+                    <li>Visibility: ${meta.visibility}</li>
+                    <li>Status: ${meta.archived ? '📦 Archived' : '🟢 Active'}</li>
+                    <li>Created: ${createdDate}</li>
+                    <li>Last Updated: ${updatedDate}</li>
+                </ul>
+            </div>
+            ${meta.topics.length > 0 ? `
+            <div class="topics">
+                <h3>Topics</h3>
+                <div class="topic-tags">
+                    ${meta.topics.map(topic => `<span class="topic">${topic}</span>`).join(' ')}
+                </div>
+            </div>` : ''}
+        </div>
+    `;
+    
+    // Show results
+    document.getElementById('results').style.display = 'block';
+}
+
+function displayAISummary(summary) {
+    const summaryDiv = document.getElementById('ai-summary');
+    
+    // Format the summary for better readability
+    let formattedSummary = summary;
+    
+    // Replace section headers with styled headers
+    formattedSummary = formattedSummary.replace(/Project Purpose:/g, '<h4 class="summary-section">📋 Project Purpose</h4>');
+    formattedSummary = formattedSummary.replace(/Tech Stack:/g, '<h4 class="summary-section">🔧 Tech Stack</h4>');
+    formattedSummary = formattedSummary.replace(/Setup\/Usage:/g, '<h4 class="summary-section">🚀 Setup/Usage</h4>');
+    
+    // Handle markdown formatting
+    
+    // Bold text (** **)
+    formattedSummary = formattedSummary.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    
+    // Italic text (* *)
+    formattedSummary = formattedSummary.replace(/\*([^\*]+)\*/g, '<em>$1</em>');
+    
+    // Convert markdown bullet points to HTML lists
+    formattedSummary = formattedSummary.replace(/(\n\s*\*\s+.*(\n\s*\*\s+.*)*)/g, function(match) {
+        const items = match.split(/\n\s*\*\s+/).filter(item => item.trim());
+        return '<ul class="summary-list">' + 
+               items.map(item => `<li>${item.trim()}</li>`).join('') + 
+               '</ul>';
+    });
+    
+    // Convert numbered lists
+    formattedSummary = formattedSummary.replace(/(\n\s*\d+\.\s+.*(\n\s*\d+\.\s+.*)*)/g, function(match) {
+        const items = match.split(/\n\s*\d+\.\s+/).filter(item => item.trim());
+        return '<ol class="summary-list">' + 
+               items.map(item => `<li>${item.trim()}</li>`).join('') + 
+               '</ol>';
+    });
+    
+    // Convert code blocks
+    formattedSummary = formattedSummary.replace(/`([^`]+)`/g, '<code>$1</code>');
+    
+    // Replace double line breaks with paragraph tags
+    formattedSummary = formattedSummary.replace(/\n\n/g, '</p><p>');
+    
+    // Replace single line breaks with <br>
+    formattedSummary = formattedSummary.replace(/\n/g, '<br>');
+    
+    summaryDiv.innerHTML = `
+        <div class="ai-summary">
+            <h3>🤖 AI Analysis</h3>
+            <div class="summary-content">
+                <p>${formattedSummary}</p>
+            </div>
+        </div>
+    `;
+}
+
+function displayReleases(releases, owner, repo) {
+    // Group releases by version
+    const releasesByVersion = {};
+    
+    // Process all releases, even those without assets
+    releases.forEach(release => {
+        if (!releasesByVersion[release.tag_name]) {
+            releasesByVersion[release.tag_name] = {
+                id: release.id,
+                name: release.name,
+                tag_name: release.tag_name,
+                published_at: new Date(release.published_at).toLocaleDateString(),
+                assets: []
+            };
+        }
+        
+        // Add assets if they exist
+        if (release.assets && release.assets.length > 0) {
+            releasesByVersion[release.tag_name].assets = [
+                ...releasesByVersion[release.tag_name].assets,
+                ...release.assets
+            ];
+        }
+    });
+    
+    // If no releases at all, show message
+    if (Object.keys(releasesByVersion).length === 0) {
+        document.getElementById('releases-content').innerHTML = `
+            <div class="no-releases">No releases available for this repository.</div>
+        `;
+        return;
+    }
+    
+    // Create HTML for releases grouped by version
+    let html = '';
+    
+    Object.values(releasesByVersion).forEach(release => {
+        html += `
+            <div class="release-version">
+                <div class="release-version-header">
+                    <h3>${release.name || release.tag_name}</h3>
+                    <span class="release-tag">${release.tag_name}</span>
+                    <span class="release-date">Released on ${release.published_at}</span>
+                </div>
+                <div class="downloads-grid">`;
+        
+        // If the release has assets, display them
+        if (release.assets && release.assets.length > 0) {
+            html += release.assets.map(asset => {
+                // Determine icon based on content type
+                let icon = '📄'; // Default
+                if (asset.content_type) {
+                    if (asset.content_type.includes('zip') || asset.content_type.includes('tar') || asset.content_type.includes('compressed')) {
+                        icon = '📦';
+                    } else if (asset.content_type.includes('executable') || asset.content_type.includes('application')) {
+                        icon = '⚙️';
+                    } else if (asset.content_type.includes('image')) {
+                        icon = '🖼️';
+                    } else if (asset.content_type.includes('text') || asset.content_type.includes('json')) {
+                        icon = '📝';
+                    }
+                }
+                
+                return `
+                <div class="download-item">
+                    <div class="download-info">
+                        <div class="download-name">${icon} ${asset.name}</div>
+                        <div class="download-meta">
+                            <span class="download-size">${formatBytes(asset.size)}</span>
+                            <span class="download-count">${asset.download_count.toLocaleString()} downloads</span>
+                            <span class="download-type">${asset.content_type ? asset.content_type.split('/')[1] : 'file'}</span>
+                        </div>
+                    </div>
+                    <a href="${asset.download_url}" class="download-button" target="_blank" download>
+                        <span class="download-icon">📥</span>
+                    </a>
+                </div>
+                `;
+            }).join('');
+        } else {
+            // No assets - create fallback download links for source code archives
+            const tagName = encodeURIComponent(release.tag_name);
+            const zipUrl = `https://github.com/${owner}/${repo}/archive/refs/tags/${tagName}.zip`;
+            const tarUrl = `https://github.com/${owner}/${repo}/archive/refs/tags/${tagName}.tar.gz`;
+            
+            html += `
+                <div class="download-item">
+                    <div class="download-info">
+                        <div class="download-name">📦 Source code (zip)</div>
+                        <div class="download-meta">
+                            <span class="download-type">ZIP</span>
+                            <span>Source archive</span>
+                        </div>
+                    </div>
+                    <a href="${zipUrl}" class="download-button" target="_blank" download>
+                        <span class="download-icon">📥</span>
+                    </a>
+                </div>
+                <div class="download-item">
+                    <div class="download-info">
+                        <div class="download-name">📦 Source code (tar.gz)</div>
+                        <div class="download-meta">
+                            <span class="download-type">TAR.GZ</span>
+                            <span>Source archive</span>
+                        </div>
+                    </div>
+                    <a href="${tarUrl}" class="download-button" target="_blank" download>
+                        <span class="download-icon">📥</span>
+                    </a>
+                </div>
+            `;
+        }
+        
+        html += `
+                </div>
+            </div>
+        `;
+    });
+    
+    document.getElementById('releases-content').innerHTML = html;
+}
+
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function displayContributors(contributors) {
+    const contributorsHtml = contributors.map(c => 
+        `<li>${c.login}: ${c.contributions} contributions</li>`
+    ).join('');
+    
+    document.getElementById('contributors').innerHTML = `
+        <h2>Top Contributors</h2>
+        <ul>${contributorsHtml}</ul>
+    `;
+}
+
+function displayCommitActivity(activityData) {
+    const activityDiv = document.getElementById('activity');
+    if (activityData.length > 0) {
+        activityDiv.innerHTML = `
+            <h2>Recent Commit Activity</h2>
+            <p>Total commits in the last ${activityData.length} weeks: 
+               ${activityData.reduce((sum, week) => sum + week.total, 0)}</p>
+        `;
+    }
+}
