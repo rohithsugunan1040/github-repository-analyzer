@@ -51,6 +51,145 @@ def handle_github_error(response: requests.Response) -> None:
         except ValueError:
             raise RuntimeError(f"GitHub API error: Status {response.status_code}")
 
+def get_repo_readme(owner: str, repo: str) -> Dict:
+    """Fetch repository README content.
+    
+    Args:
+        owner (str): Repository owner
+        repo (str): Repository name
+        
+    Returns:
+        dict: README content and metadata
+    """
+    url = f"https://api.github.com/repos/{owner}/{repo}/readme"
+    response = requests.get(url, headers=get_github_headers())
+    
+    if response.status_code == 404:
+        return {"content": None, "error": "README not found"}
+    
+    if not response.ok:
+        handle_github_error(response)
+    
+    data = response.json()
+    content = base64.b64decode(data["content"]).decode("utf-8")
+    
+    return {
+        "content": content,
+        "name": data["name"],
+        "path": data["path"],
+        "size": data["size"],
+        "encoding": data["encoding"]
+    }
+
+def get_repo_releases(owner: str, repo: str) -> List[Dict]:
+    """Fetch repository releases with pagination support.
+    
+    Args:
+        owner (str): Repository owner
+        repo (str): Repository name
+        
+    Returns:
+        list: Release information including assets
+    """
+    url = f"https://api.github.com/repos/{owner}/{repo}/releases?per_page=100"
+    all_releases = []
+    
+    while url:
+        response = requests.get(url, headers=get_github_headers())
+        
+        if not response.ok:
+            handle_github_error(response)
+            
+        all_releases.extend(response.json())
+        
+        # Get next page URL from Link header
+        url = None
+        link_header = response.headers.get('Link', '')
+        
+        if 'rel="next"' in link_header:
+            for link in link_header.split(','):
+                if 'rel="next"' in link:
+                    url_part = link.split(';')[0].strip()
+                    if url_part.startswith('<') and url_part.endswith('>'):
+                        url = url_part[1:-1]
+                    break
+    
+    # Process releases to extract asset information
+    return [
+        {
+            "id": release["id"],
+            "name": release["name"] or release["tag_name"],
+            "tag_name": release["tag_name"],
+            "published_at": release["published_at"],
+            "body": release["body"],
+            "assets": [
+                {
+                    "id": asset["id"],
+                    "name": asset["name"],
+                    "size": asset["size"],
+                    "download_count": asset["download_count"],
+                    "created_at": asset["created_at"],
+                    "updated_at": asset["updated_at"],
+                    "download_url": asset["browser_download_url"],
+                    "content_type": asset["content_type"]
+                } 
+                for asset in release["assets"]
+            ]
+        } 
+        for release in all_releases
+    ]
+
+def generate_repo_summary(readme_content: str, repo_metadata: Dict = None) -> str:
+    """Generate an AI summary of the repository using Gemini.
+    
+    Args:
+        readme_content (str): Repository README content
+        repo_metadata (Dict, optional): Repository metadata
+        
+    Returns:
+        str: AI-generated summary
+    """
+    
+    # Configure Gemini API
+    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+    model = genai.GenerativeModel('gemini-2.0-flash')
+    
+    # Create a comprehensive prompt including both README and repo metadata
+    repo_info = ""
+    if repo_metadata:
+        repo_info = f"""
+        Repository Information:
+        - Name: {repo_metadata.get('name', 'Unknown')}
+        - Description: {repo_metadata.get('description', 'No description')}
+        - Stars: {repo_metadata.get('stars', 0)}
+        - Forks: {repo_metadata.get('forks', 0)}
+        - Watchers: {repo_metadata.get('watchers', 0)}
+        - Open Issues: {repo_metadata.get('open_issues', 0)}
+        - Primary Language: {repo_metadata.get('language', 'Not specified')}
+        - Languages Used: {', '.join(repo_metadata.get('languages', {}).keys())}
+        - Created: {repo_metadata.get('created_at', 'Unknown')}
+        - Last Updated: {repo_metadata.get('updated_at', 'Unknown')}
+        - Topics: {', '.join(repo_metadata.get('topics', []))}
+        """
+    
+    prompt = f"""
+    Analyze this GitHub repository based on its README and repository information. Provide a concise summary with the following sections:
+    1. Project Purpose: What the repository does
+    2. Tech Stack: Key technologies and frameworks used
+    
+
+    {repo_info}
+    
+    README Content:
+    {readme_content}
+    """
+    
+    try:
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"Error generating summary: {str(e)}"
+
 def parse_github_url(url: str) -> Tuple[str, str]:
     """Extract owner and repository name from GitHub URL.
     
@@ -60,12 +199,28 @@ def parse_github_url(url: str) -> Tuple[str, str]:
     Returns:
         tuple: (owner, repo_name)
     """
-    pattern = r'github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/]+)'
+    pattern = r"github\.com/([^/]+)/([^/]+)"
     match = re.search(pattern, url)
     if not match:
-        raise ValueError(f"Invalid GitHub URL format: {url}")
+        raise ValueError("Invalid GitHub URL format")
+    return match.group(1), match.group(2)
+
+def get_repo_languages(owner: str, repo: str) -> Dict[str, int]:
+    """Fetch all programming languages used in the repository.
     
-    return match.group('owner'), match.group('repo')
+    Args:
+        owner (str): Repository owner
+        repo (str): Repository name
+        
+    Returns:
+        dict: Language names mapped to byte counts
+    """
+    url = f"https://api.github.com/repos/{owner}/{repo}/languages"
+    response = requests.get(url, headers=get_github_headers())
+    if not response.ok:
+        handle_github_error(response)
+    return response.json()
+
 
 def get_repo_metadata(owner: str, repo: str) -> Dict:
     """Fetch repository metadata.
@@ -143,76 +298,6 @@ def get_repo_metadata(owner: str, repo: str) -> Dict:
         "branch_count": len(branches)
     }
 
-def get_repo_readme(owner: str, repo: str) -> Dict:
-    """Fetch repository README content.
-    
-    Args:
-        owner (str): Repository owner
-        repo (str): Repository name
-        
-    Returns:
-        dict: README content and metadata
-    """
-    url = f"https://api.github.com/repos/{owner}/{repo}/readme"
-    response = requests.get(url, headers=get_github_headers())
-    
-    if response.status_code == 404:
-        return {"content": None, "error": "README not found"}
-    
-    if not response.ok:
-        handle_github_error(response)
-    
-    data = response.json()
-    content = base64.b64decode(data["content"]).decode("utf-8")
-    
-    return {
-        "content": content,
-        "name": data["name"],
-        "path": data["path"],
-        "size": data["size"],
-        "encoding": data["encoding"]
-    }
-
-def get_repo_languages(owner: str, repo: str) -> Dict[str, int]:
-    """Fetch all programming languages used in the repository.
-    
-    Args:
-        owner (str): Repository owner
-        repo (str): Repository name
-        
-    Returns:
-        dict: Language names mapped to byte counts
-    """
-    url = f"https://api.github.com/repos/{owner}/{repo}/languages"
-    response = requests.get(url, headers=get_github_headers())
-    if not response.ok:
-        handle_github_error(response)
-    return response.json()
-
-def get_repo_branches(owner: str, repo: str) -> List[Dict]:
-    """Fetch repository branches.
-    
-    Args:
-        owner (str): Repository owner
-        repo (str): Repository name
-        
-    Returns:
-        list: Branch information
-    """
-    url = f"https://api.github.com/repos/{owner}/{repo}/branches"
-    response = requests.get(url, headers=get_github_headers())
-    
-    if not response.ok:
-        handle_github_error(response)
-    
-    branches = response.json()
-    
-    return [{
-        "name": branch["name"],
-        "is_default": False,  # Will be updated in get_repo_metadata
-        "commit_sha": branch["commit"]["sha"]
-    } for branch in branches]
-
 def get_contributors(owner: str, repo: str, limit: int = 10) -> List[Dict]:
     """Fetch repository contributors from GitHub API.
     
@@ -258,102 +343,26 @@ def get_commit_activity(owner: str, repo: str) -> List[Dict]:
         "total": week["total"]
     } for week in response.json()]
 
-def get_repo_releases(owner: str, repo: str) -> List[Dict]:
-    """Fetch repository releases with pagination support.
+def get_repo_branches(owner: str, repo: str) -> List[Dict]:
+    """Fetch repository branches.
     
     Args:
         owner (str): Repository owner
         repo (str): Repository name
         
     Returns:
-        list: Release information including assets
+        list: Branch information
     """
-    url = f"https://api.github.com/repos/{owner}/{repo}/releases?per_page=100"
-    all_releases = []
+    url = f"https://api.github.com/repos/{owner}/{repo}/branches"
+    response = requests.get(url, headers=get_github_headers())
     
-    while url:
-        response = requests.get(url, headers=get_github_headers())
-        
-        if not response.ok:
-            handle_github_error(response)
-            
-        all_releases.extend(response.json())
-        
-        # Get next page URL from Link header
-        url = None
-        link_header = response.headers.get('Link', '')
-        
-        if 'rel="next"' in link_header:
-            for link in link_header.split(','):
-                if 'rel="next"' in link:
-                    url_part = link.split(';')[0].strip()
-                    if url_part.startswith('<') and url_part.endswith('>'):
-                        url = url_part[1:-1]
-                    break
+    if not response.ok:
+        handle_github_error(response)
     
-    # Process releases to extract asset information
-    return [
-        {
-            "id": release["id"],
-            "name": release["name"] or release["tag_name"],
-            "tag_name": release["tag_name"],
-            "published_at": release["published_at"],
-            "body": release["body"],
-            "assets": [
-                {
-                    "id": asset["id"],
-                    "name": asset["name"],
-                    "size": asset["size"],
-                    "download_count": asset["download_count"],
-                    "content_type": asset["content_type"],
-                    "browser_download_url": asset["browser_download_url"]
-                }
-                for asset in release["assets"]
-            ]
-        }
-        for release in all_releases
-    ]
-
-def generate_repo_summary(readme_content: str, repo_metadata: Dict = None) -> str:
-    """Generate an AI summary of the repository using Gemini.
+    branches = response.json()
     
-    Args:
-        readme_content (str): Repository README content
-        repo_metadata (Dict, optional): Repository metadata
-        
-    Returns:
-        str: AI-generated summary
-    """
-    if not readme_content:
-        return "No README content available for summary"
-    
-    prompt = """You are an expert in analyzing GitHub repositories. 
-    Please analyze the following README content and provide a concise summary 
-    of the project's purpose, key features, and technical aspects.
-    
-    If available, also include:
-    - Project maturity (based on stars, forks, and age)
-    - Main programming languages used
-    - Notable features or capabilities
-    - Any specific technologies or frameworks used
-    
-    Keep the summary concise and focused on the most important aspects.
-    """
-    
-    if repo_metadata:
-        # Add additional context from metadata
-        stars = repo_metadata.get('stars', 0)
-        forks = repo_metadata.get('forks', 0)
-        age = parse_date(repo_metadata.get('created_at', '')).year if repo_metadata.get('created_at') else 'unknown'
-        languages = list(repo_metadata.get('languages', {}).keys())[:3]  # Show top 3 languages
-        
-        additional_context = f"\n\nAdditional Context:\n- Stars: {stars}\n- Forks: {forks}\n- Age: {age}\n- Languages: {', '.join(languages)}"
-        prompt += additional_context
-    
-    try:
-        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-        model = genai.GenerativeModel('gemini-pro')
-        response = model.generate_content(prompt + "\n\nREADME Content:\n" + readme_content[:10000])
-        return response.text
-    except Exception as e:
-        return f"Error generating summary: {str(e)}"
+    return [{
+        "name": branch["name"],
+        "is_default": False,  # Will be updated in get_repo_metadata
+        "commit_sha": branch["commit"]["sha"]
+    } for branch in branches]
