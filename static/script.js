@@ -293,16 +293,26 @@ function displayAISummary(summary) {
 }
 
 function displayReleases(releases, owner, repo) {
+    // If no releases, show message and exit
+    if (!releases || releases.length === 0) {
+        document.getElementById('releases-content').innerHTML = `
+            <div class="no-releases">No releases available for this repository.</div>
+        `;
+        return;
+    }
+    
     // Group releases by version
     const releasesByVersion = {};
     
-    // Process all releases, even those without assets
+    // Process all releases
     releases.forEach(release => {
-        if (!releasesByVersion[release.tag_name]) {
-            releasesByVersion[release.tag_name] = {
-                id: release.id,
-                name: release.name,
-                tag_name: release.tag_name,
+        const tagName = release.tag_name;
+        
+        // Initialize release object if not exists
+        if (!releasesByVersion[tagName]) {
+            releasesByVersion[tagName] = {
+                name: release.name || tagName,
+                tag_name: tagName,
                 published_at: new Date(release.published_at).toLocaleDateString(),
                 assets: []
             };
@@ -310,108 +320,105 @@ function displayReleases(releases, owner, repo) {
         
         // Add assets if they exist
         if (release.assets && release.assets.length > 0) {
-            releasesByVersion[release.tag_name].assets = [
-                ...releasesByVersion[release.tag_name].assets,
-                ...release.assets
-            ];
+            releasesByVersion[tagName].assets.push(...release.assets);
         }
     });
     
-    // If no releases at all, show message
-    if (Object.keys(releasesByVersion).length === 0) {
-        document.getElementById('releases-content').innerHTML = `
-            <div class="no-releases">No releases available for this repository.</div>
-        `;
-        return;
-    }
-    
-    // Create HTML for releases grouped by version
+    // Generate HTML for each release
     let html = '';
-    
     Object.values(releasesByVersion).forEach(release => {
+        // Release header
         html += `
-            <div class="release-version">
-                <div class="release-version-header">
-                    <h3>${release.name || release.tag_name}</h3>
-                    <span class="release-tag">${release.tag_name}</span>
-                    <span class="release-date">Released on ${release.published_at}</span>
-                </div>
-                <div class="downloads-grid">`;
+        <div class="release-version">
+            <div class="release-version-header">
+                <h3>${release.name}</h3>
+                <span class="release-tag">${release.tag_name}</span>
+                <span class="release-date">Released on ${release.published_at}</span>
+            </div>
+            <div class="downloads-grid">`;
         
-        // If the release has assets, display them
+        // If has assets, show them
         if (release.assets && release.assets.length > 0) {
-            html += release.assets.map(asset => {
-                // Determine icon based on content type
-                let icon = '📄'; // Default
-                if (asset.content_type) {
-                    if (asset.content_type.includes('zip') || asset.content_type.includes('tar') || asset.content_type.includes('compressed')) {
-                        icon = '📦';
-                    } else if (asset.content_type.includes('executable') || asset.content_type.includes('application')) {
-                        icon = '⚙️';
-                    } else if (asset.content_type.includes('image')) {
-                        icon = '🖼️';
-                    } else if (asset.content_type.includes('text') || asset.content_type.includes('json')) {
-                        icon = '📝';
-                    }
-                }
+            release.assets.forEach(asset => {
+                // Simple icon selection
+                const icon = getAssetIcon(asset.content_type);
+                const fileType = asset.content_type ? asset.content_type.split('/').pop() : 'file';
                 
-                return `
+                html += `
                 <div class="download-item">
                     <div class="download-info">
                         <div class="download-name">${icon} ${asset.name}</div>
                         <div class="download-meta">
                             <span class="download-size">${formatBytes(asset.size)}</span>
                             <span class="download-count">${asset.download_count.toLocaleString()} downloads</span>
-                            <span class="download-type">${asset.content_type ? asset.content_type.split('/')[1] : 'file'}</span>
+                            <span class="download-type">${fileType}</span>
                         </div>
                     </div>
                     <a href="${asset.download_url}" class="download-button" target="_blank" download>
                         <span class="download-icon">📥</span>
                     </a>
-                </div>
-                `;
-            }).join('');
-        } else {
-            // No assets - create fallback download links for source code archives
+                </div>`;
+            });
+        } 
+        // Otherwise show fallback source downloads
+        else {
             const tagName = encodeURIComponent(release.tag_name);
             const zipUrl = `https://github.com/${owner}/${repo}/archive/refs/tags/${tagName}.zip`;
             const tarUrl = `https://github.com/${owner}/${repo}/archive/refs/tags/${tagName}.tar.gz`;
             
+            // Add ZIP download
             html += `
-                <div class="download-item">
-                    <div class="download-info">
-                        <div class="download-name">📦 Source code (zip)</div>
-                        <div class="download-meta">
-                            <span class="download-type">ZIP</span>
-                            <span>Source archive</span>
-                        </div>
+            <div class="download-item">
+                <div class="download-info">
+                    <div class="download-name">📦 Source code (zip)</div>
+                    <div class="download-meta">
+                        <span class="download-type">ZIP</span>
+                        <span>Source archive</span>
                     </div>
-                    <a href="${zipUrl}" class="download-button" target="_blank" download>
-                        <span class="download-icon">📥</span>
-                    </a>
                 </div>
-                <div class="download-item">
-                    <div class="download-info">
-                        <div class="download-name">📦 Source code (tar.gz)</div>
-                        <div class="download-meta">
-                            <span class="download-type">TAR.GZ</span>
-                            <span>Source archive</span>
-                        </div>
+                <a href="${zipUrl}" class="download-button" target="_blank" download>
+                    <span class="download-icon">📥</span>
+                </a>
+            </div>`;
+            
+            // Add TAR.GZ download
+            html += `
+            <div class="download-item">
+                <div class="download-info">
+                    <div class="download-name">📦 Source code (tar.gz)</div>
+                    <div class="download-meta">
+                        <span class="download-type">TAR.GZ</span>
+                        <span>Source archive</span>
                     </div>
-                    <a href="${tarUrl}" class="download-button" target="_blank" download>
-                        <span class="download-icon">📥</span>
-                    </a>
                 </div>
-            `;
+                <a href="${tarUrl}" class="download-button" target="_blank" download>
+                    <span class="download-icon">📥</span>
+                </a>
+            </div>`;
         }
         
         html += `
-                </div>
             </div>
-        `;
+        </div>`;
     });
     
     document.getElementById('releases-content').innerHTML = html;
+}
+
+// Helper function to determine asset icon
+function getAssetIcon(contentType) {
+    if (!contentType) return '📄';
+    
+    if (contentType.includes('zip') || contentType.includes('tar') || contentType.includes('compressed')) {
+        return '📦';
+    } else if (contentType.includes('executable') || contentType.includes('application')) {
+        return '⚙️';
+    } else if (contentType.includes('image')) {
+        return '🖼️';
+    } else if (contentType.includes('text') || contentType.includes('json')) {
+        return '📝';
+    }
+    return '📄';
 }
 
 function formatBytes(bytes) {

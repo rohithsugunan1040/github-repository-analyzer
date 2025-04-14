@@ -100,42 +100,44 @@ def get_repo_releases(owner: str, repo: str) -> List[Dict]:
         if not response.ok:
             handle_github_error(response)
             
-        releases_page = response.json()
-        all_releases.extend(releases_page)
+        all_releases.extend(response.json())
         
-        # Check for pagination
-        link_header = response.headers.get('Link', '')
+        # Get next page URL from Link header
         url = None
+        link_header = response.headers.get('Link', '')
         
-        # Parse Link header for next page
         if 'rel="next"' in link_header:
             for link in link_header.split(','):
                 if 'rel="next"' in link:
-                    # Extract URL properly - remove angle brackets
                     url_part = link.split(';')[0].strip()
-                    # Remove the angle brackets
                     if url_part.startswith('<') and url_part.endswith('>'):
-                        url = url_part[1:-1]  # Remove first and last character
+                        url = url_part[1:-1]
                     break
     
     # Process releases to extract asset information
-    return [{
-        "id": release["id"],
-        "name": release["name"] or release["tag_name"],
-        "tag_name": release["tag_name"],
-        "published_at": release["published_at"],
-        "body": release["body"],
-        "assets": [{
-            "id": asset["id"],
-            "name": asset["name"],
-            "size": asset["size"],
-            "download_count": asset["download_count"],
-            "created_at": asset["created_at"],
-            "updated_at": asset["updated_at"],
-            "download_url": asset["browser_download_url"],
-            "content_type": asset["content_type"]
-        } for asset in release["assets"]]
-    } for release in all_releases]
+    return [
+        {
+            "id": release["id"],
+            "name": release["name"] or release["tag_name"],
+            "tag_name": release["tag_name"],
+            "published_at": release["published_at"],
+            "body": release["body"],
+            "assets": [
+                {
+                    "id": asset["id"],
+                    "name": asset["name"],
+                    "size": asset["size"],
+                    "download_count": asset["download_count"],
+                    "created_at": asset["created_at"],
+                    "updated_at": asset["updated_at"],
+                    "download_url": asset["browser_download_url"],
+                    "content_type": asset["content_type"]
+                } 
+                for asset in release["assets"]
+            ]
+        } 
+        for release in all_releases
+    ]
 
 def generate_repo_summary(readme_content: str, repo_metadata: Dict = None) -> str:
     """Generate an AI summary of the repository using Gemini.
